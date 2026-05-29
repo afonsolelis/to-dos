@@ -19,6 +19,8 @@ class Config:
     timezone: str
     reminder_hour: int
     reminder_minute: int
+    gemini_api_key: str
+    gemini_model: str
 
     @property
     def tzinfo(self) -> ZoneInfo:
@@ -46,4 +48,6 @@ def load_config() -> Config:
         timezone=os.environ.get("TIMEZONE", "America/Sao_Paulo").strip(),
         reminder_hour=int(os.environ.get("REMINDER_HOUR", "8")),
         reminder_minute=int(os.environ.get("REMINDER_MINUTE", "0")),
+        gemini_api_key=os.environ.get("GEMINI_API_KEY", "").strip(),
+        gemini_model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite").strip(),
     )

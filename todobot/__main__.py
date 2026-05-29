@@ -5,11 +5,12 @@ from __future__ import annotations
 import logging
 from datetime import time
 
-from telegram.ext import Application, CommandHandler
+from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
 from . import handlers
 from .config import load_config
 from .db import Database
+from .gemini import GeminiInterpreter
 from .reminders import send_daily_reminders
 
 logging.basicConfig(
@@ -41,6 +42,15 @@ def main() -> None:
     app.bot_data["db"] = db
     app.bot_data["config"] = config
 
+    if config.gemini_api_key:
+        app.bot_data["gemini"] = GeminiInterpreter(
+            config.gemini_api_key, config.gemini_model
+        )
+        logger.info("Gemini habilitado (modelo %s).", config.gemini_model)
+    else:
+        app.bot_data["gemini"] = None
+        logger.warning("GEMINI_API_KEY ausente: interpretação por IA desativada.")
+
     app.add_handler(CommandHandler("start", handlers.start))
     app.add_handler(CommandHandler("help", handlers.help_cmd))
     app.add_handler(CommandHandler("add", handlers.add))
@@ -48,6 +58,8 @@ def main() -> None:
     app.add_handler(CommandHandler("today", handlers.today))
     app.add_handler(CommandHandler("contexts", handlers.contexts))
     app.add_handler(CommandHandler("done", handlers.done))
+    # Texto livre (não-comando) vai para o interpretador do Gemini.
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.chat))
 
     reminder_time = time(
         hour=config.reminder_hour, minute=config.reminder_minute, tzinfo=config.tzinfo
