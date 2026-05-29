@@ -10,6 +10,7 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 from .formatting import fmt_date, format_todo_line, parse_due_date, short_id
+from .keyboards import back_to_menu, main_menu, todos_keyboard
 
 HELP = (
     "*To-Do Bot* 🤖\n\n"
@@ -43,13 +44,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat = update.effective_chat
     await _db(context).register_user(user.id, chat.id, user.full_name)
     await update.message.reply_text(
-        f"Olá, {user.first_name}! Vou te lembrar das tarefas todo dia de manhã.\n\n" + HELP,
-        parse_mode=ParseMode.MARKDOWN,
+        f"Olá, {user.first_name}! Vou te lembrar das tarefas todo dia de manhã.\n\n"
+        "Use os botões abaixo ou fale comigo naturalmente. 👇",
+        reply_markup=main_menu(),
     )
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(HELP, parse_mode=ParseMode.MARKDOWN)
+
+
+async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text("O que você quer fazer?", reply_markup=main_menu())
 
 
 async def add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -79,27 +85,29 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
 
 
-async def list_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    wanted = " ".join(context.args).strip() or None
-    todos = await _db(context).list_todos(update.effective_user.id, context=wanted)
+async def _render_list(db, user_id: int, tz, wanted: str | None):
+    """Retorna (texto, markup) da lista de tarefas abertas."""
+    todos = await db.list_todos(user_id, context=wanted)
     if not todos:
         scope = f" em *{wanted}*" if wanted else ""
-        await update.message.reply_text(
-            f"Nenhuma tarefa aberta{scope}. 🎉", parse_mode=ParseMode.MARKDOWN
-        )
-        return
+        return f"Nenhuma tarefa aberta{scope}. 🎉", back_to_menu()
 
-    tz = _tz(context)
     by_ctx: dict[str, list[dict]] = defaultdict(list)
     for t in todos:
         by_ctx[t["context"]].append(t)
 
-    lines: list[str] = []
+    lines = ["*Suas tarefas abertas* (toque pra concluir):"]
     for ctx_name in sorted(by_ctx):
         lines.append(f"\n*{ctx_name}*")
         for t in by_ctx[ctx_name]:
             lines.append("• " + format_todo_line(t, tz))
-    await update.message.reply_text("\n".join(lines).strip(), parse_mode=ParseMode.MARKDOWN)
+    return "\n".join(lines).strip(), todos_keyboard(todos)
+
+
+async def list_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    wanted = " ".join(context.args).strip() or None
+    text, markup = await _render_list(_db(context), update.effective_user.id, _tz(context), wanted)
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
 
 
 async def today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -247,3 +255,62 @@ async def _dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE, result) 
         await update.message.reply_text(
             result.reply or "Como posso ajudar com suas tarefas?"
         )
+
+
+async def _edit(query, text: str, markup=None) -> None:
+    """Edita a mensagem do callback, ignorando o erro de 'não modificada'."""
+    from telegram.error import BadRequest
+
+    try:
+        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
+    except BadRequest as exc:
+        if "not modified" not in str(exc).lower():
+            raise
+
+
+async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Trata os toques nos botões inline (callback_data)."""
+    query = update.callback_query
+    await query.answer()
+    db = _db(context)
+    tz = _tz(context)
+    user_id = update.effective_user.id
+    data = query.data or ""
+
+    if data == "act:menu":
+        await _edit(query, "O que você quer fazer?", main_menu())
+
+    elif data == "act:add":
+        await _edit(
+            query,
+            "✍️ Me diga a tarefa em linguagem natural.\n"
+            "Ex.: _amanhã reunião do trabalho_ ou _entregar relatório do doutorado sexta_.",
+            back_to_menu(),
+        )
+
+    elif data == "act:list":
+        text, markup = await _render_list(db, user_id, tz, None)
+        await _edit(query, text, markup)
+
+    elif data == "act:today":
+        from .reminders import build_today_message
+
+        text = await build_today_message(db, user_id, tz)
+        await _edit(query, text, back_to_menu())
+
+    elif data == "act:contexts":
+        ctxs = await db.list_contexts(user_id)
+        if ctxs:
+            text = "*Seus contextos:*\n" + "\n".join(f"• {c}" for c in sorted(ctxs))
+        else:
+            text = "Você ainda não tem contextos. Use ➕ Adicionar."
+        await _edit(query, text, back_to_menu())
+
+    elif data.startswith("done:"):
+        suffix = data.split(":", 1)[1]
+        todo = await db.complete_by_suffix(user_id, suffix)
+        if todo is not None:
+            await query.answer(text=f"✔️ Concluída: {todo['text']}", show_alert=False)
+        # re-renderiza a lista atualizada
+        text, markup = await _render_list(db, user_id, tz, None)
+        await _edit(query, text, markup)

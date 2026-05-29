@@ -5,7 +5,13 @@ from __future__ import annotations
 import logging
 from datetime import time
 
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    MessageHandler,
+    filters,
+)
 
 from . import handlers
 from .config import load_config
@@ -58,6 +64,9 @@ def main() -> None:
     app.add_handler(CommandHandler("today", handlers.today))
     app.add_handler(CommandHandler("contexts", handlers.contexts))
     app.add_handler(CommandHandler("done", handlers.done))
+    app.add_handler(CommandHandler("menu", handlers.menu))
+    # Botões inline (callback_data).
+    app.add_handler(CallbackQueryHandler(handlers.on_callback))
     # Texto livre (não-comando) vai para o interpretador do Gemini.
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.chat))
 
